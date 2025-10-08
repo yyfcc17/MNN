@@ -8,6 +8,14 @@
 
 #include "QNNUtils.hpp"
 
+#ifdef _WIN32
+#include <windows.h>
+typedef HMODULE LibHandle;
+#else
+#include <dlfcn.h>
+typedef void* LibHandle;
+#endif
+
 namespace MNN {
 namespace QNN {
 
@@ -38,9 +46,26 @@ void QnnHalfToFloat(const int16_t* src, float* dst, size_t size) {
 #endif
 
 QnnInterface_getProviders_t QnnInterface_getProviders = nullptr;
-
+#ifdef MNN_WITH_PLUGIN
+QnnSystemInterface_getProviders_t QnnSystemInterface_getProviders = nullptr;
+#endif
 bool loadQNNSymbol() {
-    void * qnnLibHandle = nullptr;
+    LibHandle qnnLibHandle = nullptr;
+
+#ifdef _WIN32
+    qnnLibHandle = LoadLibraryA("QnnHtp.dll");
+    if (!qnnLibHandle) {
+        MNN_PRINT("MNN_QNN: Failed to open QNN DLL. Ensure QnnHtp.dll is available in your environment.\n");
+        return false;
+    }
+
+    QnnInterface_getProviders = (QnnInterface_getProviders_t)GetProcAddress(qnnLibHandle, "QnnInterface_getProviders");
+    if (!QnnInterface_getProviders) {
+        MNN_PRINT("MNN_QNN: Failed to load symbol <QnnInterface_getProviders>.\n");
+        FreeLibrary(qnnLibHandle);
+        return false;
+    }
+#else
     qnnLibHandle = dlopen("libQnnHtp.so", RTLD_NOW | RTLD_LOCAL);
     const char * errorOpen = dlerror();
     if (!qnnLibHandle) {
@@ -55,9 +80,37 @@ bool loadQNNSymbol() {
         dlclose(qnnLibHandle);
         return false;
     }
+    #ifdef MNN_WITH_PLUGIN
+    void* qnnSystemHandle = dlopen("libQnnSystem.so", RTLD_NOW | RTLD_LOCAL);
+    if (nullptr == qnnSystemHandle) {
+        const char * errorOpen = dlerror();
+        MNN_PRINT("MNN_QNN: Failed to open QNN libs. Ensure that the libs related to the QNN HTP backend is available in your environment. dlerror() returns %s.\n", errorOpen);
+        return false;
+    }
+    QnnSystemInterface_getProviders = (QnnSystemInterface_getProviders_t)dlsym(qnnSystemHandle, "QnnSystemInterface_getProviders");
+    if (nullptr == QnnSystemInterface_getProviders) {
+        const char * errorSym = dlerror();
+        MNN_PRINT("MNN_QNN: Failed to load symbol <QnnSystemInterface_getProviders>. dlerror returns %s.\n", errorSym);
+        return false;
+    }
+    #endif
+#endif
 
     return true;
 }
+
+
+bool checkCapability(QNN_INTERFACE_VER_TYPE qnnInterface, QnnProperty_Key_t key) {
+    Qnn_ErrorHandle_t errorCode;
+    errorCode = qnnInterface.propertyHasCapability(key);
+    if (errorCode == QNN_PROPERTY_SUPPORTED) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+#ifdef ENABLE_QNN_ONLINE_FINALIZE
 
 void registerQNNOps() {
     ___QNNActivationCreator__OpType_ReLU__();
@@ -77,14 +130,27 @@ void registerQNNOps() {
     ___QNNPoolCreator__OpType_Pooling__();
     ___QNNPoolCreator__OpType_Pooling3D__();
     ___QNNReduceCreator__OpType_Reduction__();
-    ___QNNReshapeCreator__OpType_Reshape__();
-    ___QNNReshapeCreator__OpType_Squeeze__();
-    ___QNNReshapeCreator__OpType_Unsqueeze__();
+    ___QNNFlattenCreator__OpType_Reshape__();
+    ___QNNFlattenCreator__OpType_Squeeze__();
+    ___QNNFlattenCreator__OpType_Unsqueeze__();
     ___QNNReshapeCreator__OpType_ConvertTensor__();
     ___QNNScaleCreator__OpType_Scale__();
     ___QNNSoftmaxCreator__OpType_Softmax__();
     ___QNNStridedSliceCreator__OpType_StridedSlice__();
+    ___QNNStridedSliceCreator__OpType_Slice__();
     ___QNNUnaryCreator__OpType_UnaryOp__();
+    ___QNNCastCreator__OpType_Cast__();
+    ___QNNPermuteCreator__OpType_Permute__();
+    ___QNNGatherCreator__OpType_GatherV2__();
+    ___QNNGatherCreator__OpType_GatherElements__();
+
+    ___QNNBroadcastToCreator__OpType_BroadcastTo__();
+    ___QNNMatMulCreator__OpType_MatMul__();
+    #ifdef MNN_SUPPORT_TRANSFORMER_FUSE
+    ___QNNAttentionCreator__OpType_Attention__();
+    #endif
+    ___QNNQuantCreator__OpType_FloatToInt8__();
+    ___QNNDeQuantCreator__OpType_Int8ToFloat__();
 }
 
 Tensor::DimensionType gQnnTensorDimType = Tensor::TENSORFLOW;
@@ -111,6 +177,8 @@ const std::map<Qnn_DataType_t, uint32_t> gQnnTypeSize = {
     {QNN_DATATYPE_UFIXED_POINT_16, 2},
     {QNN_DATATYPE_UFIXED_POINT_32, 4},
 };
+
+std::string gParamMarker = "PARAM";
 
 int getNHWCAxis(const int axis, const int dim, const Tensor::DimensionType type) {
     MNN_ASSERT(dim >= 1 && axis >= 0 && axis < dim);
@@ -201,16 +269,6 @@ std::vector<uint32_t> getNHWCShape(const Tensor * tensor) {
     return NHWCShape;
 }
 
-bool checkCapability(QNN_INTERFACE_VER_TYPE qnnInterface, QnnProperty_Key_t key) {
-    Qnn_ErrorHandle_t errorCode;
-    errorCode = qnnInterface.propertyHasCapability(key);
-    if (errorCode == QNN_PROPERTY_SUPPORTED) {
-        return true;
-    } else {
-        return false;
-    }
-}
-
 void printNHWCShape(const Tensor * tensor) {
     std::vector<uint32_t> shape = getNHWCShape(tensor);
     MNN_PRINT("NHWC shape is:");
@@ -219,6 +277,6 @@ void printNHWCShape(const Tensor * tensor) {
     }
     MNN_PRINT(".\n");
 }
-
+#endif
 } // end namespace QNN
 } // end namespace MNN

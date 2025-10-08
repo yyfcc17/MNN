@@ -71,6 +71,7 @@ option(MNN_ENABLE_COVERAGE "Build with coverage enable" OFF)
 option(MNN_BUILD_PROTOBUFFER "Build with protobuffer in MNN" ON)
 option(MNN_BUILD_OPENCV "Build OpenCV api in MNN." OFF)
 option(MNN_BUILD_LLM "Build llm library based MNN." OFF)
+option(MNN_BUILD_LLM_OMNI "If build llm library, build it with omni (support image / audio)" OFF)
 option(MNN_BUILD_DIFFUSION "Build diffusion demo based MNN." OFF)
 option(MNN_INTERNAL "Build with MNN internal features, such as model authentication, metrics logging" OFF)
 option(MNN_JNI "Build MNN Jni for java to use" OFF)
@@ -78,6 +79,7 @@ option(MNN_SUPPORT_BF16 "Enable MNN's bf16 op" OFF)
 option(MNN_LOW_MEMORY "Build MNN support low memory for weight quant model." OFF)
 option(MNN_CPU_WEIGHT_DEQUANT_GEMM "Build MNN CPU weight dequant related gemm kernels." OFF)
 option(MNN_BUILD_AUDIO "Build audio api in MNN." OFF)
+option(MNN_SME2 "Use Arm sme2 instructions" ON)
 
 if (MNN_BUILD_MINI)
     set(MNN_SKIPBUILD_GEOMETRY ON)
@@ -101,6 +103,21 @@ ENDIF()
 
 IF (NOT DEFINED MNN_USE_SPARSE_COMPUTE)
    set(MNN_USE_SPARSE_COMPUTE ON)
+ENDIF()
+
+IF (MNN_BUILD_LLM)
+    set(MNN_LOW_MEMORY ON)
+    set(MNN_SUPPORT_TRANSFORMER_FUSE ON)
+    IF (MNN_BUILD_LLM_OMNI)
+        set(MNN_BUILD_OPENCV ON)
+        set(MNN_BUILD_AUDIO ON)
+    ENDIF()
+ENDIF()
+
+IF (MNN_BUILD_DIFFUSION)
+    set(MNN_LOW_MEMORY ON)
+    set(MNN_SUPPORT_TRANSFORMER_FUSE ON)
+    set(MNN_BUILD_OPENCV ON)
 ENDIF()
 
 IF(NOT MNN_BUILD_SHARED_LIBS AND MNN_SEP_BUILD)
@@ -128,6 +145,10 @@ IF(WIN32)
     SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /wd4267 /wd4018 /wd4251 /wd4996 /wd4244 /wd4146 /wd4129 /wd4305 /wd4275 /wd4101")
     SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4267 /wd4018 /wd4251 /wd4996 /wd4244 /wd4146 /wd4129 /wd4305 /wd4275 /wd4101")
   ENDIF()
+ENDIF()
+
+IF (NOT MNN_BUILD_SHARED_LIBS)
+    add_definitions(-DMNN_BUILD_STATIC_LIBS)
 ENDIF()
 
 # for coverage test
@@ -235,14 +256,17 @@ option(MNN_OPENGL "Enable OpenGL" OFF)
 option(MNN_VULKAN "Enable Vulkan" OFF)
 option(MNN_ARM82 "Enable ARMv8.2's FP16 Compute" ON)
 option(MNN_SUPPORT_FP16_ARMV7 "Enable ARMv8.2's FP16 Compute for armv7 arch, may cause library not valid for 32 bit cpu" OFF)
-option(MNN_KLEIDIAI "Enable KLEIDIAI" OFF)
+option(MNN_KLEIDIAI "Enable KLEIDIAI" ON)
 option(MNN_ONEDNN "Enable oneDNN" OFF)
 option(MNN_AVX2 "Open AVX2 Compile for x86 if possible" ON)
 option(MNN_AVX512 "Enable AVX512" OFF)
+option(MNN_USE_RVV "Enable RVV" OFF)
 option(MNN_CUDA "Enable CUDA" OFF)
 option(MNN_TENSORRT "Enable TensorRT" OFF)
 option(MNN_COREML "Enable CoreML" OFF)
 option(MNN_NNAPI "Enable NNAPI" OFF)
+option(MNN_QNN "Enable QNN" OFF)
+option(MNN_QNN_ONLINE_FINALIZE "Enable QNN Online Finalize" ON)
 
 option(MNN_GPU_TIME_PROFILE "Enable time profiling for the OpenCL backend and Vulkan backend." OFF)
 
@@ -250,6 +274,10 @@ option(MNN_CUDA_PROFILE "Enable CUDA profile" OFF)
 
 if (NOT MNN_CUDA OR NOT CMAKE_SYSTEM_NAME MATCHES "^Linux")
   set(MNN_CUDA_PROFILE OFF)
+endif()
+
+if (NOT MNN_QNN) 
+  set(MNN_QNN_ONLINE_FINALIZE OFF)
 endif()
 
 if (MNN_USE_THREAD_POOL)
@@ -292,6 +320,7 @@ message(STATUS "\toneDNN: ${MNN_ONEDNN}")
 message(STATUS "\tTensorRT: ${MNN_TENSORRT}")
 message(STATUS "\tCoreML: ${MNN_COREML}")
 message(STATUS "\tNNAPI: ${MNN_NNAPI}")
+message(STATUS "\tQNN: ${MNN_QNN}")
 message(STATUS "\tCUDA: ${MNN_CUDA}")
 message(STATUS "\tOpenMP: ${MNN_OPENMP}")
 message(STATUS "\tBF16: ${MNN_SUPPORT_BF16}")
@@ -513,6 +542,7 @@ ENDIF()
 IF(MNN_BUILD_LLM)
   file(GLOB MNN_LLM_HDRS ${CMAKE_CURRENT_SOURCE_DIR}/transformers/llm/engine/include/llm/*)
   list(APPEND MNN_EXTRA_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/transformers/llm/engine/include/llm/llm.hpp)
+  list(APPEND MNN_EXTRA_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/transformers/llm/engine/include/llm/reranker.hpp)
 ENDIF()
 
 IF(MNN_BUILD_DIFFUSION)
@@ -564,8 +594,10 @@ if ((NOT MSVC) AND MNN_HIDDEN)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility-inlines-hidden -fvisibility=hidden")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fvisibility=hidden")
     set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -fvisibility=hidden")
-    # Omit frame pointer may cause difficult debug
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fomit-frame-pointer")
+    if (NOT APPLE)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fomit-frame-pointer -funwind-tables")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fomit-frame-pointer -funwind-tables")
+    endif()
 endif()
 if (NOT MSVC)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fstrict-aliasing -ffunction-sections -fdata-sections -fno-rtti -fno-exceptions ")
@@ -776,7 +808,6 @@ ENDIF()
 ENDIF()
 
 IF(MNN_BUILD_LLM)
-    # add_definitions(-DMNN_BUILD_LLM)
     include(${CMAKE_CURRENT_LIST_DIR}/transformers/llm/engine/CMakeLists.txt)
     IF(NOT MNN_SEP_BUILD)
       list(APPEND MNN_TARGETS llm)
@@ -833,11 +864,10 @@ if(APPLE)
       set_target_properties(MNN PROPERTIES FRAMEWORK TRUE)
       set_target_properties(MNN PROPERTIES
           MACOSX_FRAMEWORK_IDENTIFIER com.alibaba.MNN
-          MACOSX_FRAMEWORK_SHORT_VERSION_STRING ${PACKAGE_VERSION}
-          MACOSX_FRAMEWORK_BUNDLE_VERSION ${PACKAGE_VERSION}
+          MACOSX_FRAMEWORK_SHORT_VERSION_STRING ${MNN_VERSION}
+          MACOSX_FRAMEWORK_BUNDLE_VERSION ${MNN_VERSION}
           XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "iPhone Developer"
       )
-      set_target_properties(MNN PROPERTIES MACOSX_FRAMEWORK_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/project/ios/MNN/Info.plist)
     ENDIF()
     IF(MNN_METAL)
       find_library(FOUNDATION Foundation REQUIRED)
@@ -952,6 +982,7 @@ ELSEIF(NOT APPLE)
   install(TARGETS MNN
       LIBRARY DESTINATION lib
       ARCHIVE DESTINATION lib
+      RUNTIME DESTINATION bin
   )
 ELSE()
   install(TARGETS MNN

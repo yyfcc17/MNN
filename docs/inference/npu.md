@@ -31,7 +31,9 @@ cp -r ${LIB_SRC} ${LIB_DEST}
 ```
 
 ### QNN后端编译
-编译 MNN 时打开编译宏`MNN_QNN`，即`-DMNN_QNN=ON`。
+- 编译 MNN 时打开编译宏`MNN_QNN`，即`-DMNN_QNN=ON`。
+- 如果运行离线编译QNN模型(离线编译方法：使用MNN2QNNModel工具)，需要开启`MNN_WITH_PLUGIN`宏。若需要减小库体积，可以选择关闭`MNN_QNN_ONLINE_FINALIZE`宏
+
 
 ### QNN后端运行
 - Backend Type设置为`MNN_FORWARD_NN`，即 5 。
@@ -41,7 +43,15 @@ HEXAGON_ARCH="75" # modify this variable according to your environment
 MNN_ROOT="/YOUR/MNN/PATH" # modify this variable according to your environment
 ANDROID_PATH="/data/local/tmp"
 adb push ${MNN_ROOT}/source/backend/qnn/3rdParty/lib/aarch64-android/libQnnHtp.so ${ANDROID_PATH}/libQnnHtp.so
+
+/*
+如下libQnnHtpPrepare.so和libQnnSystem.so两个库，根据情况二选一
+- 如果在线生成qnn图模型，运行时需要libQnnHtpPrepare.so
+- 如果离线生成qnn图模型，运行时需要libQnnSystem.so
+*/
 adb push ${MNN_ROOT}/source/backend/qnn/3rdParty/lib/aarch64-android/libQnnHtpPrepare.so ${ANDROID_PATH}/libQnnHtpPrepare.so
+adb push ${MNN_ROOT}/source/backend/qnn/3rdParty/lib/aarch64-android/libQnnSystem.so ${ANDROID_PATH}/libQnnSystem.so
+
 adb push ${MNN_ROOT}/source/backend/qnn/3rdParty/lib/aarch64-android/libQnnHtpV${HEXAGON_ARCH}Stub.so ${ANDROID_PATH}/libQnnHtpV${HEXAGON_ARCH}Stub.so
 adb push ${MNN_ROOT}/source/backend/qnn/3rdParty/lib/hexagon-v${HEXAGON_ARCH}/unsigned/libQnnHtpV${HEXAGON_ARCH}Skel.so ${ANDROID_PATH}/libQnnHtpV${HEXAGON_ARCH}Skel.so
 ```
@@ -49,6 +59,10 @@ adb push ${MNN_ROOT}/source/backend/qnn/3rdParty/lib/hexagon-v${HEXAGON_ARCH}/un
 ```
 adb shell "cd /data/local/tmp && LD_LIBRARY_PATH=/data/local/tmp ADSP_LIBRARY_PATH=/data/local/tmp ./MyExe.out"
 ```
+
+### QNN量化功能说明
+- 仅权重量化（激活是浮点）：只支持Linear权重int8、channel-wise的对称量化。
+- 激活&权重都量化：支持激活per-tensor对称量化，权重是int8/int4、channel-wise的对称量化。
 
 ## CoreML
 适用于 Mac / iOS / iPad

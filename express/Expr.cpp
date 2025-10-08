@@ -58,6 +58,16 @@ void Variable::Info::syncSize() {
         }
     }
 }
+// Only valid for Input / Const / Trainable
+void VARP::setOrder(Dimensionformat format) {
+    if (nullptr != mContent->expr().first->get()) {
+        return;
+    }
+    auto index = mContent->expr().second;
+    auto inside = mContent->expr().first->inside();
+    inside->mOutputInfos[index].order = format;
+    TensorUtils::getDescribe(inside->mOutputTensors[index])->dimensionFormat = (MNN_DATA_FORMAT)Utils::convertFormat(format);
+}
 
 bool VARP::fix(VARP::InputType type) const {
     if (nullptr == mContent->expr().first->get()) {
@@ -571,7 +581,7 @@ bool Variable::setDevicePtr(const void* devicePtr, int memoryType) {
         return false;
     }
     informDirty();
-    MNN_ASSERT(TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->quantAttr == nullptr || TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->type == DataType_DT_FLOAT);
+    MNN_ASSERT(TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->quantAttr == nullptr || (!TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->applyQuant));
     mFrom->mInside->mContentDirty = false;
     // Clear host address, Don't malloc hostPtr afterwards
     Utils::releaseMemoryForHostTensor(mFrom->inside()->mOutputTensors[0]);
@@ -795,7 +805,7 @@ void* Variable::readInternal(bool forShape) {
         auto inside = mFrom->inside();
         auto originTensor = inside->mOutputTensors[mFromIndex];
         auto des = TensorUtils::getDescribe(originTensor);
-        if (WrapExecution::needWrap(originTensor, nullptr) || (des->quantAttr != nullptr && des->type == DataType_DT_INT8)) {
+        if (WrapExecution::needWrap(originTensor, nullptr) || (des->quantAttr != nullptr && des->applyQuant)) {
             // For StaticModule will other-device runtime, we may create Variable with other-device's memory
             // The case won't occurred for varibale = INPUT
             // Need Copy
@@ -902,13 +912,13 @@ void* Variable::writeInternal(bool inform) {
     if (inform) {
         informDirty();
     }
-    MNN_ASSERT(TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->quantAttr == nullptr || TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->type == DataType_DT_FLOAT);
+    MNN_ASSERT(TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->quantAttr == nullptr || !TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->applyQuant);
     mFrom->mInside->mContentDirty = false;
     return mFrom->inside()->mOutputTensors[0]->host<void>();
 }
 
 void Variable::writeScaleInternal(float scaleValue, float zeroPoint, bool inform) {
-    MNN_ASSERT(TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->quantAttr == nullptr || TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->type == DataType_DT_FLOAT);
+    MNN_ASSERT(TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->quantAttr == nullptr || !TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->applyQuant);
     if (inform) {
        informDirty();
     }
@@ -955,9 +965,7 @@ bool Expr::setInfoDirty() {
     mInside->mInfoDirty    = true;
     mInside->mContentDirty = true;
     mValid = true;
-    if (mInside->mCache != nullptr) {
-        mInside->mCache->setShapeDirty();
-    }
+    mInside->mCache = nullptr;
     for (auto o : mInside->mOutputTensors) {
         Utils::releaseMemoryForHostTensor(o);
     }
@@ -1004,10 +1012,8 @@ std::vector<VARP> Variable::load(const uint8_t* buffer, size_t length) {
     std::map<int, VARP> variableMap;
     bool isStatic = source->usage == Usage_INFERENCE_STATIC;
     std::vector<std::shared_ptr<Tensor>> allTensors;
-    if (isStatic) {
-        allTensors.resize(source->tensorName.size());
-        initTensors(allTensors, flatbuffers::GetRoot<MNN::Net>(buffer));
-    }
+    allTensors.resize(source->tensorName.size());
+    initTensors(allTensors, flatbuffers::GetRoot<MNN::Net>(buffer));
 
     // Generate All Exprs by order of net
     for (int i = 0; i < opSize; ++i) {
@@ -1026,6 +1032,8 @@ std::vector<VARP> Variable::load(const uint8_t* buffer, size_t length) {
         if (isStatic && nullptr != expr->get()) {
             // Set tensor shape from net
             expr->mCanDecompose = false;
+        }
+        if (nullptr != expr->get() || expr->inputType() == VARP::INPUT) {
             for (int index = 0; index < op->outputIndexes.size(); ++index) {
                 auto outputIndex = op->outputIndexes[index];
                 delete expr->inside()->mOutputTensors[index];
@@ -1239,6 +1247,7 @@ void Variable::save(const std::vector<VARP>& vars, NetT* dest) {
                 auto tensorDes = TensorUtils::getDescribe(tensor);
                 if (nullptr != tensorDes->quantAttr) {
                     describe->quantInfo.reset(new TensorQuantInfoT);
+                    describe->quantInfo->type = tensorDes->quantAttr->type;
                     describe->quantInfo->max = tensorDes->quantAttr->max;
                     describe->quantInfo->min = tensorDes->quantAttr->min;
                     describe->quantInfo->zero = tensorDes->quantAttr->zero;
@@ -1328,6 +1337,18 @@ std::vector<EXPRP> Variable::getExecuteOrder(const std::vector<VARP>& outputs) {
     for (auto output : outputs) {
         if (nullptr == output) {
             continue;
+        }
+        if (nullptr == output->expr().first) {
+            continue;
+        }
+        auto op = output->expr().first->get();
+        bool isConst = ((op && op->type() == OpType_Const) || (!op && output->expr().first->inputType() == VARP::CONSTANT));
+        if (isConst) {
+            if (!output->expr().first->visited()){
+                output->expr().first->setVisited(true);
+                sequence.emplace_back(output->expr().first);
+                continue;
+            }
         }
         workStack.push(output->expr().first);
     }

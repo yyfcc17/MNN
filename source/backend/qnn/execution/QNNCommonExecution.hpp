@@ -23,8 +23,15 @@ do { \
     return NOT_SUPPORT; \
 } while(0)
 
+#define CLEAR_BEFORE_ADDING_NODE \
+    mNodeType.clear();           \
+    mInputs.clear();             \
+    mParams.clear();             \
+    mOutputs.clear();
+
 namespace MNN {
 namespace QNN {
+#ifdef ENABLE_QNN_ONLINE_FINALIZE
 
 class QNNCommonExecution : public Execution {
 public:
@@ -41,17 +48,20 @@ public:
 protected:
     void setNodeName(const Op * op, const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs);
 
+    void createStaticTensor(const std::string & name, Qnn_DataType_t dataType, const std::vector<uint32_t> & dimensions, const void * buffer, Qnn_QuantizeParams_t quantizeParam = DEFAULT_QUANTIZE_PARAMS);
     void createStaticFloatTensor(const std::string & name, Qnn_DataType_t dataType, const std::vector<uint32_t> & dimensions, const float * buffer, Qnn_QuantizeParams_t quantize = DEFAULT_QUANTIZE_PARAMS);
     void createStageTensor(const std::string & name, Qnn_DataType_t dataType, const std::vector<int> & dimensions, Qnn_QuantizeParams_t quantize = DEFAULT_QUANTIZE_PARAMS);
     void createStageTensor(const std::string & name, Qnn_DataType_t dataType, const std::vector<uint32_t> & dimensions, Qnn_QuantizeParams_t quantize = DEFAULT_QUANTIZE_PARAMS);
     void createParamTensor(const std::string & paramName, Qnn_DataType_t dataType, const std::vector<uint32_t> & dims, void * data, std::string postName = "");
     void createParamScalar(const std::string & name, bool data);
     void createParamScalar(const std::string & name, uint32_t data);
+    void createParamScalar(const std::string & name, int data);
     void createParamScalar(const std::string & name, float data);
 
     void addNodeCommon(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs);
+    void addNodeCommonPermute(const std::string & nodeNamePostfix, const Qnn_Tensor_t & input, const Qnn_Param_t & paramPerm, const Qnn_Tensor_t & output);
+    void addNodeCommonReshape(const std::string & nodeNamePostfix, const Qnn_Tensor_t & input, const Qnn_Tensor_t & output);
 
-private:
     void clean();
 
 public:
@@ -72,7 +82,7 @@ public:
     std::vector<std::shared_ptr<QNNParamTensorWrapper>> mParamTensorWrappers;
     std::vector<std::shared_ptr<QNNParamScalarWrapper>> mParamScalarWrappers;
 };
-
+#endif
 } // end namespace QNN
 } // end namespace MNN
 
